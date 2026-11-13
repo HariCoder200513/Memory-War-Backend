@@ -18,7 +18,8 @@
 .vscode/
 *.swp
 *.swo
-
+.app-pass
 # OS
 .DS_Store
 Thumbs.db
+env-copy

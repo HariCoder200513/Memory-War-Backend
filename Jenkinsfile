@@ -53,10 +53,7 @@ pipeline {
 
         stage('Deploy to EC2') {
             when {
-                allOf {
-                    branch 'main'
-                    expression { params.EC2_HOST?.trim() }
-                }
+                expression { params.EC2_HOST?.trim() }
             }
             steps {
                 withCredentials([
