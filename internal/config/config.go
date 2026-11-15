@@ -20,6 +20,8 @@ type Config struct {
 	SMTPFrom        string
 	FrontendBaseURL string
 	Environment     string
+	AWSRegion       string
+	SQSQueueURL     string
 }
 
 func Load() *Config {
@@ -37,6 +39,8 @@ func Load() *Config {
 		SMTPFrom:        getEnv("SMTP_FROM", "noreply@memorywars.com"),
 		FrontendBaseURL: getEnv("FRONTEND_BASE_URL", "http://localhost:3000"),
 		Environment:     getEnv("ENVIRONMENT", "development"),
+		AWSRegion:       getEnv("AWS_REGION", "ap-southeast-2"),
+		SQSQueueURL:     getEnv("SQS_QUEUE_URL", ""),
 	}
 }
 

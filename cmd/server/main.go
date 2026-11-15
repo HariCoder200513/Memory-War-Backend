@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/memory-wars/backend/internal/config"
 	"github.com/memory-wars/backend/internal/database"
 	"github.com/memory-wars/backend/internal/handlers"
 	"github.com/memory-wars/backend/internal/middleware"
+	"github.com/memory-wars/backend/internal/queue"
 	"github.com/memory-wars/backend/internal/services"
+	"github.com/memory-wars/backend/internal/worker"
 )
 
 func main() {
@@ -20,7 +24,24 @@ func main() {
 	}
 	defer db.Close()
 
-	authService := services.NewAuthService(db, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	database.StartKeepalive(ctx, db, 1*time.Minute)
+
+	var sqsClient *queue.SQSClient
+	if cfg.SQSQueueURL != "" {
+		sqsClient, err = queue.NewSQSClient(cfg.AWSRegion, cfg.SQSQueueURL)
+		if err != nil {
+			log.Printf("Warning: failed to init SQS client: %v", err)
+		} else {
+			emailWorker := worker.NewEmailWorker(sqsClient, cfg)
+			go emailWorker.Start(ctx)
+		}
+	} else {
+		log.Println("SQS_QUEUE_URL not set, running without email queue (codes printed to console)")
+	}
+
+	authService := services.NewAuthService(db, cfg, sqsClient)
 	authHandler := handlers.NewAuthHandler(authService)
 
 	router := gin.Default()
@@ -40,9 +61,14 @@ func main() {
 			protected := auth.Group("")
 			protected.Use(middleware.AuthMiddleware(cfg.JWTSecret))
 			{
+				protected.POST("/verify-code", authHandler.VerifyCode)
 				protected.GET("/verify-email/status", authHandler.CheckEmailVerification)
 				protected.POST("/verify-email/resend", authHandler.ResendVerificationEmail)
 				protected.POST("/logout", authHandler.Logout)
+				protected.POST("/set-username", authHandler.SetUsername)
+				protected.GET("/check-username", authHandler.CheckUsername)
+				protected.POST("/set-avatar", authHandler.SetAvatar)
+				protected.GET("/profile", authHandler.GetProfile)
 			}
 		}
 	}
