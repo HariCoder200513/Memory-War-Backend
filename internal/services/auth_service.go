@@ -221,9 +221,9 @@ func (s *AuthService) RefreshToken(refreshToken string) (*models.AuthResponse, e
 func (s *AuthService) GetUserByID(userID string) (*models.UserInfo, error) {
 	var user models.UserInfo
 	err := s.db.QueryRow(
-		"SELECT id, email, username, avatar, email_verified FROM users WHERE id = $1",
+		"SELECT id, email, username, COALESCE(avatar, 'orbit'), COALESCE(role, 'player'), email_verified FROM users WHERE id = $1",
 		userID,
-	).Scan(&user.ID, &user.Email, &user.Username, &user.Avatar, &user.EmailVerified)
+	).Scan(&user.ID, &user.Email, &user.Username, &user.Avatar, &user.Role, &user.EmailVerified)
 	if err != nil {
 		return nil, fmt.Errorf("user not found")
 	}
@@ -343,8 +343,8 @@ func (s *AuthService) sendEmailDirect(to, subject, code string) {
 
 func (s *AuthService) generateAuthResponse(userID, email string, emailVerified bool) (*models.AuthResponse, error) {
 	var username *string
-	var avatar string
-	_ = s.db.QueryRow("SELECT username, COALESCE(avatar, 'orbit') FROM users WHERE id = $1", userID).Scan(&username, &avatar)
+	var avatar, role string
+	_ = s.db.QueryRow("SELECT username, COALESCE(avatar, 'orbit'), COALESCE(role, 'player') FROM users WHERE id = $1", userID).Scan(&username, &avatar, &role)
 
 	accessToken, err := utils.GenerateToken(userID, s.cfg.JWTSecret, s.cfg.JWTExpiry)
 	if err != nil {
@@ -364,6 +364,7 @@ func (s *AuthService) generateAuthResponse(userID, email string, emailVerified b
 			Email:         email,
 			Username:      username,
 			Avatar:        avatar,
+			Role:          role,
 			EmailVerified: emailVerified,
 		},
 	}, nil

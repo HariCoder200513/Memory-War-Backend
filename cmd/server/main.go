@@ -43,6 +43,8 @@ func main() {
 
 	authService := services.NewAuthService(db, cfg, sqsClient)
 	authHandler := handlers.NewAuthHandler(authService)
+	creatorService := services.NewCreatorService(db)
+	creatorHandler := handlers.NewCreatorHandler(creatorService)
 
 	router := gin.Default()
 	router.Use(middleware.CORSMiddleware())
@@ -69,6 +71,8 @@ func main() {
 				protected.GET("/check-username", authHandler.CheckUsername)
 				protected.POST("/set-avatar", authHandler.SetAvatar)
 				protected.GET("/profile", authHandler.GetProfile)
+				protected.POST("/creator/apply", creatorHandler.Apply)
+				protected.GET("/creator/status", creatorHandler.GetApplicationStatus)
 			}
 		}
 	}

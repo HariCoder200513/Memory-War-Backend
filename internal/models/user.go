@@ -55,6 +55,7 @@ type UserInfo struct {
 	Email         string  `json:"email"`
 	Username      *string `json:"username"`
 	Avatar        string  `json:"avatar"`
+	Role          string  `json:"role"`
 	EmailVerified bool    `json:"email_verified"`
 }
 
