@@ -43,8 +43,9 @@ func main() {
 
 	authService := services.NewAuthService(db, cfg, sqsClient)
 	authHandler := handlers.NewAuthHandler(authService)
-	creatorService := services.NewCreatorService(db)
-	creatorHandler := handlers.NewCreatorHandler(creatorService)
+
+	gameService := services.NewGameService(db)
+	gameHandler := handlers.NewGameHandler(gameService)
 
 	router := gin.Default()
 	router.Use(middleware.CORSMiddleware())
@@ -71,9 +72,18 @@ func main() {
 				protected.GET("/check-username", authHandler.CheckUsername)
 				protected.POST("/set-avatar", authHandler.SetAvatar)
 				protected.GET("/profile", authHandler.GetProfile)
-				protected.POST("/creator/apply", creatorHandler.Apply)
-				protected.GET("/creator/status", creatorHandler.GetApplicationStatus)
 			}
+		}
+
+		games := api.Group("/games")
+		games.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+		{
+			games.POST("", gameHandler.CreateGame)
+			games.GET("", gameHandler.ListGames)
+			games.GET("/:id", gameHandler.GetGame)
+			games.PUT("/:id", gameHandler.UpdateGame)
+			games.DELETE("/:id", gameHandler.DeleteGame)
+			games.POST("/:id/submit", gameHandler.SubmitGame)
 		}
 	}
 
