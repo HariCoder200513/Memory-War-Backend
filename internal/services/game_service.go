@@ -132,18 +132,12 @@ func (s *GameService) ListGames(creatorID, status string) ([]models.Game, error)
 }
 
 func (s *GameService) UpdateGame(gameID, creatorID string, req *models.UpdateGameRequest) (*models.Game, error) {
-	var status string
-	err := s.db.QueryRow("SELECT status FROM games WHERE id = $1 AND creator_id = $2", gameID, creatorID).Scan(&status)
+	game, err := s.GetGame(gameID, creatorID)
 	if err != nil {
 		return nil, fmt.Errorf("game not found")
 	}
-	if status != "draft" {
+	if game.Status != "draft" {
 		return nil, fmt.Errorf("can only edit draft games")
-	}
-
-	game, err := s.GetGame(gameID, creatorID)
-	if err != nil {
-		return nil, err
 	}
 
 	if req.Name != nil {
@@ -179,72 +173,96 @@ func (s *GameService) UpdateGame(gameID, creatorID string, req *models.UpdateGam
 	if req.AllowHints != nil {
 		game.AllowHints = *req.AllowHints
 	}
-	game.UpdatedAt = time.Now()
 
-	_, err = s.db.Exec(`
+	updated, err := scanGame(s.db.QueryRow(`
 		UPDATE games SET name = $1, description = $2, category = $3, grid_rows = $4, grid_columns = $5,
 			card_icons = $6, card_back = $7, time_limit_seconds = $8, move_limit = $9,
-			mismatch_delay_ms = $10, allow_hints = $11, updated_at = $12
-		WHERE id = $13 AND creator_id = $14`,
+			mismatch_delay_ms = $10, allow_hints = $11, updated_at = NOW()
+		WHERE id = $12 AND creator_id = $13
+		RETURNING `+gameColumns,
 		game.Name, game.Description, game.Category, game.GridRows, game.GridColumns,
 		game.CardIcons, game.CardBack, game.TimeLimitSeconds, game.MoveLimit,
-		game.MismatchDelayMs, game.AllowHints, game.UpdatedAt,
+		game.MismatchDelayMs, game.AllowHints,
 		gameID, creatorID,
-	)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update game: %w", err)
 	}
-	return game, nil
+	return updated, nil
 }
 
 func (s *GameService) DeleteGame(gameID, creatorID string) error {
-	var status string
-	err := s.db.QueryRow("SELECT status FROM games WHERE id = $1 AND creator_id = $2", gameID, creatorID).Scan(&status)
-	if err != nil {
-		return fmt.Errorf("game not found")
-	}
-	if status != "draft" {
-		return fmt.Errorf("can only delete draft games")
-	}
-
-	_, err = s.db.Exec("DELETE FROM games WHERE id = $1 AND creator_id = $2", gameID, creatorID)
+	result, err := s.db.Exec(
+		"DELETE FROM games WHERE id = $1 AND creator_id = $2 AND status = 'draft'",
+		gameID, creatorID,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to delete game: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("game not found or not in draft status")
 	}
 	return nil
 }
 
-func (s *GameService) SubmitGame(gameID, creatorID string) (*models.Game, error) {
-	log.Printf("[SubmitGame] gameID=%s creatorID=%s", gameID, creatorID)
-
-	var status string
-	err := s.db.QueryRow("SELECT status FROM games WHERE id = $1 AND creator_id = $2", gameID, creatorID).Scan(&status)
-	if err != nil {
-		log.Printf("[SubmitGame] SELECT status failed: %v", err)
-		return nil, fmt.Errorf("game not found: %w", err)
-	}
-
-	log.Printf("[SubmitGame] current status=%q", status)
-	if status != "draft" {
-		return nil, fmt.Errorf("can only submit draft games (current: %s)", status)
-	}
-
-	now := time.Now()
-	_, err = s.db.Exec(
-		"UPDATE games SET status = 'pending_review', updated_at = $1 WHERE id = $2 AND creator_id = $3",
-		now, gameID, creatorID,
+func (s *GameService) ListGamesByStatus(status string) ([]models.Game, error) {
+	rows, err := s.db.Query(
+		`SELECT `+gameColumns+` FROM games WHERE status = $1 ORDER BY updated_at DESC`,
+		status,
 	)
 	if err != nil {
-		log.Printf("[SubmitGame] UPDATE failed: %v", err)
-		return nil, fmt.Errorf("failed to submit game: %w", err)
+		return nil, fmt.Errorf("failed to list games: %w", err)
+	}
+	defer rows.Close()
+
+	var games []models.Game
+	for rows.Next() {
+		g, err := scanGame(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan game: %w", err)
+		}
+		games = append(games, *g)
+	}
+	return games, nil
+}
+
+func (s *GameService) ReviewGame(gameID, status string) (*models.Game, error) {
+	if status != "published" && status != "rejected" {
+		return nil, fmt.Errorf("invalid review status: must be published or rejected")
 	}
 
-	log.Printf("[SubmitGame] UPDATE succeeded, fetching game")
-	game, err := s.GetGame(gameID, creatorID)
+	game, err := scanGame(s.db.QueryRow(
+		`UPDATE games SET status = $1, updated_at = NOW()
+		 WHERE id = $2 AND status = 'pending_review'
+		 RETURNING `+gameColumns,
+		status, gameID,
+	))
 	if err != nil {
-		log.Printf("[SubmitGame] GetGame after update failed: %v", err)
-		return nil, fmt.Errorf("submit ok but fetch failed: %w", err)
+		return nil, fmt.Errorf("game not found or not in pending_review status")
 	}
-	log.Printf("[SubmitGame] success, returning game %s with status %s", game.ID, game.Status)
+	return game, nil
+}
+
+func (s *GameService) GetGameByID(gameID string) (*models.Game, error) {
+	game, err := scanGame(s.db.QueryRow(
+		`SELECT `+gameColumns+` FROM games WHERE id = $1`, gameID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("game not found: %w", err)
+	}
+	return game, nil
+}
+
+func (s *GameService) SubmitGame(gameID, creatorID string) (*models.Game, error) {
+	game, err := scanGame(s.db.QueryRow(
+		`UPDATE games SET status = 'pending_review', updated_at = NOW()
+		 WHERE id = $1 AND creator_id = $2 AND status = 'draft'
+		 RETURNING `+gameColumns,
+		gameID, creatorID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("game not found or not in draft status")
+	}
 	return game, nil
 }

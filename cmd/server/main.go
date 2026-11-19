@@ -46,6 +46,10 @@ func main() {
 
 	gameService := services.NewGameService(db)
 	gameHandler := handlers.NewGameHandler(gameService)
+	reviewerHandler := handlers.NewReviewerHandler(gameService)
+
+	appService := services.NewApplicationService(db)
+	appHandler := handlers.NewApplicationHandler(appService)
 
 	router := gin.Default()
 	router.Use(middleware.CORSMiddleware())
@@ -77,6 +81,7 @@ func main() {
 
 		games := api.Group("/games")
 		games.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+		games.Use(middleware.CreatorMiddleware(db))
 		{
 			games.POST("", gameHandler.CreateGame)
 			games.GET("", gameHandler.ListGames)
@@ -84,6 +89,25 @@ func main() {
 			games.PUT("/:id", gameHandler.UpdateGame)
 			games.DELETE("/:id", gameHandler.DeleteGame)
 			games.POST("/:id/submit", gameHandler.SubmitGame)
+		}
+
+		applications := api.Group("/applications")
+		applications.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+		{
+			applications.POST("", appHandler.CreateApplication)
+		}
+
+		reviewer := api.Group("/reviewer")
+		reviewer.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+		reviewer.Use(middleware.ReviewerMiddleware(db))
+		{
+			reviewer.GET("/games", reviewerHandler.ListPendingGames)
+			reviewer.GET("/games/:id", reviewerHandler.GetGame)
+			reviewer.POST("/games/:id/approve", reviewerHandler.ApproveGame)
+			reviewer.POST("/games/:id/reject", reviewerHandler.RejectGame)
+			reviewer.GET("/applications", appHandler.ListApplications)
+			reviewer.POST("/applications/:id/approve", appHandler.ApproveApplication)
+			reviewer.POST("/applications/:id/reject", appHandler.RejectApplication)
 		}
 	}
 

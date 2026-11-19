@@ -65,15 +65,21 @@ func (s *AuthService) Register(req *models.RegisterRequest) (*models.AuthRespons
 
 	s.sendVerificationAsync(req.Email, code)
 
-	return s.generateAuthResponse(id, req.Email, false)
+	return s.generateAuthResponse(id, req.Email, false, nil, "orbit", "player")
 }
 
 func (s *AuthService) Login(req *models.LoginRequest) (*models.AuthResponse, error) {
-	var user models.User
+	var (
+		id, email, passwordHash, avatar, role string
+		emailVerified                         bool
+		username                              *string
+	)
 	err := s.db.QueryRow(
-		"SELECT id, email, password_hash, email_verified FROM users WHERE email = $1",
+		`SELECT id, email, password_hash, email_verified,
+		        username, COALESCE(avatar, 'orbit'), COALESCE(role, 'player')
+		 FROM users WHERE email = $1`,
 		req.Email,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.EmailVerified)
+	).Scan(&id, &email, &passwordHash, &emailVerified, &username, &avatar, &role)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("invalid email or password")
 	}
@@ -81,11 +87,11 @@ func (s *AuthService) Login(req *models.LoginRequest) (*models.AuthResponse, err
 		return nil, fmt.Errorf("database error: %w", err)
 	}
 
-	if !utils.CheckPassword(req.Password, user.PasswordHash) {
+	if !utils.CheckPassword(req.Password, passwordHash) {
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	return s.generateAuthResponse(user.ID, user.Email, user.EmailVerified)
+	return s.generateAuthResponse(id, email, emailVerified, username, avatar, role)
 }
 
 func (s *AuthService) VerifyCode(userID string, code string) error {
@@ -206,16 +212,22 @@ func (s *AuthService) RefreshToken(refreshToken string) (*models.AuthResponse, e
 		return nil, fmt.Errorf("invalid refresh token")
 	}
 
-	var user models.User
+	var (
+		id, email, avatar, role string
+		emailVerified           bool
+		username                *string
+	)
 	err = s.db.QueryRow(
-		"SELECT id, email, email_verified FROM users WHERE id = $1",
+		`SELECT id, email, email_verified,
+		        username, COALESCE(avatar, 'orbit'), COALESCE(role, 'player')
+		 FROM users WHERE id = $1`,
 		claims.UserID,
-	).Scan(&user.ID, &user.Email, &user.EmailVerified)
+	).Scan(&id, &email, &emailVerified, &username, &avatar, &role)
 	if err != nil {
 		return nil, fmt.Errorf("user not found")
 	}
 
-	return s.generateAuthResponse(user.ID, user.Email, user.EmailVerified)
+	return s.generateAuthResponse(id, email, emailVerified, username, avatar, role)
 }
 
 func (s *AuthService) GetUserByID(userID string) (*models.UserInfo, error) {
@@ -231,24 +243,19 @@ func (s *AuthService) GetUserByID(userID string) (*models.UserInfo, error) {
 }
 
 func (s *AuthService) SetUsername(userID, username string) error {
-	var taken bool
-	err := s.db.QueryRow(
-		"SELECT EXISTS(SELECT 1 FROM users WHERE username = $1 AND id != $2)",
-		username, userID,
-	).Scan(&taken)
-	if err != nil {
-		return fmt.Errorf("database error: %w", err)
-	}
-	if taken {
-		return fmt.Errorf("username already taken")
-	}
-
-	_, err = s.db.Exec(
-		"UPDATE users SET username = $1, updated_at = NOW() WHERE id = $2",
+	result, err := s.db.Exec(
+		`UPDATE users SET username = $1, updated_at = NOW()
+		 WHERE id = $2 AND NOT EXISTS (
+		     SELECT 1 FROM users WHERE username = $1 AND id != $2
+		 )`,
 		username, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set username: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("username already taken")
 	}
 	return nil
 }
@@ -341,17 +348,13 @@ func (s *AuthService) sendEmailDirect(to, subject, code string) {
 	}
 }
 
-func (s *AuthService) generateAuthResponse(userID, email string, emailVerified bool) (*models.AuthResponse, error) {
-	var username *string
-	var avatar, role string
-	_ = s.db.QueryRow("SELECT username, COALESCE(avatar, 'orbit'), COALESCE(role, 'player') FROM users WHERE id = $1", userID).Scan(&username, &avatar, &role)
-
-	accessToken, err := utils.GenerateToken(userID, s.cfg.JWTSecret, s.cfg.JWTExpiry)
+func (s *AuthService) generateAuthResponse(userID, email string, emailVerified bool, username *string, avatar, role string) (*models.AuthResponse, error) {
+	accessToken, err := utils.GenerateToken(userID, role, s.cfg.JWTSecret, s.cfg.JWTExpiry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
 
-	refreshToken, err := utils.GenerateToken(userID, s.cfg.JWTSecret, s.cfg.RefreshExpiry)
+	refreshToken, err := utils.GenerateToken(userID, role, s.cfg.JWTSecret, s.cfg.RefreshExpiry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
